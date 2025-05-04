@@ -9,14 +9,14 @@
 #define DEFAULT_JPEG_QUALITY 85
 
 // Structure to hold buffer info
-typedef struct cam_buf_info {
+typedef struct CamBufInfo {
     unsigned char* start;
     size_t length;  // Use size_t for length/size generally
-} cam_buf_info;
+} CamBufInfo;
 
 typedef struct {
     int v4l2_fd;
-    cam_buf_info buf_infos[FRAMEBUFFER_COUNT];
+    CamBufInfo buf_infos[FRAMEBUFFER_COUNT];
     enum v4l2_buf_type buf_type;
     struct v4l2_format fmt;
     unsigned char* rgb_buffer;  // 预分配的RGB缓冲区

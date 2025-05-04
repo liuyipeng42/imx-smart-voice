@@ -1,8 +1,10 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
-#include "client_api.h"
+#include "client_receive.h"
+#include "client_send.h"
 #include "llm_api.h"
 #include "v4l2_camera.h"
 
@@ -53,7 +55,6 @@ void api_test() {
     int fd;
     int ret = 0;
     unsigned char key_status = 0;
-    FILE* arecord_pipe = NULL;
 
     fd = open("/dev/key0", O_RDWR);
     if (fd < 0) {
@@ -63,6 +64,7 @@ void api_test() {
     ret = read(fd, &key_status, sizeof(key_status));
     if (ret != -1) { /* 数据读取正确 */
         printf("key_status = %d\n", key_status);
+        FILE* arecord_pipe = NULL;
         if (key_status == 1 && arecord_pipe == NULL) {
             printf("start\n");
             arecord_pipe = popen("arecord -f cd ./record.wav", "r");
@@ -74,16 +76,41 @@ void api_test() {
             system("pkill arecord");
             pclose(arecord_pipe);
             arecord_pipe = NULL;
-            if (audio_send(server_ip, 8000, "test.wav", "/upload_record") != 0) {
+
+            if (audio_send(server_ip, 8000, "test.wav", "/upload/audio") != 0)
                 fprintf(stderr, "audio_send failed.\n");
+            int listen_sock = setup_listen_socket(8001);
+            char* text = handle_request(listen_sock, NULL);
+            printf("Received text: %s\n", text);
+            close(listen_sock);
+
+            const char* prompt = "回复中的数字不要使用阿拉伯数字，使用中文数字，回复中只回应以下内容：\n\n";
+
+            char* message = malloc(strlen(prompt) + strlen(text) + 1);  // +1 给终止符
+            strcpy(message, prompt);
+            strcat(message, text);
+
+            char* response = send_llm_request(&qwen_config, message, 1);
+            printf("LLM Response: %s\n", response);
+            llm_reponse_send(server_ip, 8000, response, "/send/text");
+
+            listen_sock = setup_listen_socket(8001);
+            handle_request(listen_sock, "./llm_reponse_audio.wav");
+            close(listen_sock);
+
+            FILE* aplay_pipe = popen("aplay ./llm_reponse_audio.wav", "r");
+            int status = pclose(aplay_pipe);
+            if (status == 0) {
+                printf("音频播放完成\n");
+            } else {
+                printf("音频播放出现问题\n");
             }
-            audio_text_receive(8001, 10000);
         }
     }
     close(fd);
 }
 
 int main(int argc, char* argv[]) {
-    camera_test();
+    api_test();
     return 0;
 }

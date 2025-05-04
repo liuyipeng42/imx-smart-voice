@@ -1,4 +1,5 @@
 CC      = arm-linux-gnueabihf-gcc
+# CC      = gcc
 
 JPEG_INSTALL_PATH = ./extern/jpeg-9e/install
 OPENSSL_INSTALL_PATH = ./extern/openssl-3.0.14/install

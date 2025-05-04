@@ -1,4 +1,5 @@
-#include <stddef.h>
+#include <stdbool.h>
+#include <stdio.h>
 
 #define TARGET_PORT 443
 #define BUFFER_SIZE 8192
@@ -25,6 +26,8 @@ typedef struct ApiConfig {
     const char* model_name;     // Optional: Model identifier (e.g., "gemini-pro")
     const char* response_search_key;
 } ApiConfig;
+
+char* send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE_PROXY);
 
 int generate_payload(char* buffer, size_t buffer_size, const char* prompt, const struct ApiConfig* config);
 

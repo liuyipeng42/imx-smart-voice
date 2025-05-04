@@ -13,16 +13,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-int send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE_PROXY) {
-    int sockfd = -1;
-    SSL_CTX* ctx = NULL;
-    SSL* ssl = NULL;
-    char request[BUFFER_SIZE];
-    char response_buffer[BUFFER_SIZE];
+char* send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool use_proxy) {
     char payload[BUFFER_SIZE / 2];
-    char final_output[BUFFER_SIZE / 2];
     int bytes;
-    int total_response_length = 0;
 
     // --- Generate API-specific Payload using function pointer ---
     if (generate_payload(payload, sizeof(payload), user_prompt, llm_api) < 0) {
@@ -35,14 +28,14 @@ int send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE
     OPENSSL_init_crypto(OPENSSL_INIT_ADD_ALL_CIPHERS | OPENSSL_INIT_ADD_ALL_DIGESTS, NULL);
 
     // --- Create Socket ---
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         perror("ERROR opening socket");
         exit(EXIT_FAILURE);
     }
 
     // --- Connect (Directly or via Proxy) ---
-    if (USE_PROXY) {
+    if (use_proxy) {
         struct sockaddr_in proxy_addr;
         memset(&proxy_addr, 0, sizeof(proxy_addr));
         proxy_addr.sin_family = AF_INET;
@@ -117,7 +110,7 @@ int send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE
     }
 
     // --- SSL/TLS Setup ---
-    ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
     if (!ctx) {
         fprintf(stderr, "ERROR creating SSL context.\n");
         ERR_print_errors_fp(stderr);
@@ -125,7 +118,7 @@ int send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE
         exit(EXIT_FAILURE);
     }
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
-    ssl = SSL_new(ctx);
+    SSL* ssl = SSL_new(ctx);
     if (!ssl) {
         fprintf(stderr, "ERROR creating SSL structure.\n");
         ERR_print_errors_fp(stderr);
@@ -176,6 +169,7 @@ int send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE
         }
     }
 
+    char request[BUFFER_SIZE];
     // Build the final request string
     int request_len = snprintf(request, sizeof(request),
                                "POST %s HTTP/1.1\r\n"
@@ -215,10 +209,10 @@ int send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE
     }
 
     // --- Receive HTTPS Response over SSL ---
+    char response_buffer[BUFFER_SIZE];
     memset(response_buffer, 0, sizeof(response_buffer));
-    total_response_length = 0;
     char read_chunk[BUFFER_SIZE];
-
+    int total_response_length = 0;
     while ((bytes = SSL_read(ssl, read_chunk, sizeof(read_chunk) - 1)) > 0) {
         if (total_response_length + bytes < sizeof(response_buffer)) {
             memcpy(response_buffer + total_response_length, read_chunk, bytes);
@@ -247,11 +241,9 @@ int send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE
     }
 
     // --- Parse API Response using function pointer ---
-    memset(final_output, 0, sizeof(final_output));
-    if (parse_response(response_buffer, final_output, sizeof(final_output), llm_api->response_search_key) ==
-        0) {
-        printf(">>> Output (%s) <<<\n%s\n", llm_api->name, final_output);
-    } else {
+    char* final_output = malloc(BUFFER_SIZE / 2);
+    memset(final_output, 0, sizeof(BUFFER_SIZE / 2));
+    if (parse_response(response_buffer, final_output, BUFFER_SIZE / 2, llm_api->response_search_key) != 0) {
         fprintf(stderr, "\nFailed to parse the relevant content from the %s API response.\n", llm_api->name);
     }
 
@@ -266,7 +258,7 @@ int send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE
     if (sockfd >= 0) {
         close(sockfd);
     }
-    return 0;
+    return final_output;
 }
 
 void json_escape_string(const char* input, char* output, size_t output_size) {
@@ -392,10 +384,10 @@ int generate_payload(char* buffer, size_t buffer_size, const char* prompt, const
     char escaped_prompt[BUFFER_SIZE / 2];
     json_escape_string(prompt, escaped_prompt, sizeof(escaped_prompt));
 
-    if (config->name == "Gemini") {
+    if (strcmp(config->name, "Gemini") == 0) {
         written = snprintf(buffer, buffer_size, "{ \"contents\": [ {\"parts\": [ {\"text\": \"%s\"} ]} ] }",
                            escaped_prompt);
-    } else if (config->name == "DeepSeek") {
+    } else if (strcmp(config->name, "DeepSeek") == 0) {
         written = snprintf(buffer, buffer_size,
                            "{"
                            "\"model\": \"%s\", "
@@ -405,7 +397,7 @@ int generate_payload(char* buffer, size_t buffer_size, const char* prompt, const
                            "\"stream\": false"
                            "}",
                            config->model_name, escaped_prompt);
-    } else if (config->name == "Qwen") {
+    } else if (strcmp(config->name, "Qwen") == 0) {
         written = snprintf(buffer, buffer_size,
                            "{"
                            "\"model\": \"%s\", "
