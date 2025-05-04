@@ -1,0 +1,11 @@
+.vscode
+board_client/test.wav
+board_client/build/*
+board_client/extern/*
+drivers/key.ko
+drivers/gt1151.ko
+qt_ui/qt_ui
+speech_backend/__pycache__
+speech_backend/audios/*
+speech_backend/models/*
+speech_backend/venv
