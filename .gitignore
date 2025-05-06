@@ -1,5 +1,5 @@
 .vscode
-board_client/test.wav
+board_client/test_audios
 board_client/build/*
 board_client/extern/*
 drivers/key.ko

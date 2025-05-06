@@ -106,7 +106,8 @@ chattts_generator = tts.ChatTTSGenerator("./models/ChatTTS")
 
 app = Flask(__name__)
 
-client_ip = "10.33.103.61"
+client_ip = "10.33.6.33"
+
 
 @app.route("/upload/audio", methods=["POST"])
 def upload_record():
@@ -192,7 +193,7 @@ def send_text():
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=False)
 
-    # text = "现在几点了？"
+    # text = "这个年份是闰年吗？"
     # result = chattts_generator.generate(
     #     text=text + ".",
     #     voice_name="Default",
@@ -203,5 +204,9 @@ if __name__ == "__main__":
 
     # sample_rate, audio_data = result
     # save_wav("temp.wav", sample_rate, audio_data)
-    # resample_wav("temp.wav", "./audios/test.wav")
+    # resample_wav("temp.wav", "./audios/test2.wav")
     # os.remove("temp.wav")
+
+    # segments, info = asr_model.transcribe("./audios/test2.wav", beam_size=5)
+    # text = "".join([segment.text for segment in segments])
+    # print("Transcribed text:", text)

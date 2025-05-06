@@ -13,12 +13,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-char* send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool use_proxy) {
-    char payload[BUFFER_SIZE / 2];
+char* send_llm_request(const ApiConfig* llm_api,
+                       const ConversationMessage* conversation_data,
+                       int conversation_cnt) {
+    char payload[BUFFER_SIZE];
     int bytes;
 
     // --- Generate API-specific Payload using function pointer ---
-    if (generate_payload(payload, sizeof(payload), user_prompt, llm_api) < 0) {
+    if (generate_payload(payload, sizeof(payload), conversation_data, conversation_cnt, llm_api) < 0) {
         fprintf(stderr, "ERROR: Failed to generate JSON payload for %s.\n", llm_api->name);
         exit(EXIT_FAILURE);
     }
@@ -35,7 +37,7 @@ char* send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool u
     }
 
     // --- Connect (Directly or via Proxy) ---
-    if (use_proxy) {
+    if (llm_api->use_proxy) {
         struct sockaddr_in proxy_addr;
         memset(&proxy_addr, 0, sizeof(proxy_addr));
         proxy_addr.sin_family = AF_INET;
@@ -379,48 +381,107 @@ void json_unescape_string(char* str) {
     *write_ptr = '\0';  // Null-terminate the unescaped string
 }
 
-int generate_payload(char* buffer, size_t buffer_size, const char* prompt, const struct ApiConfig* config) {
+int generate_payload(char* buffer,
+                     size_t buffer_size,
+                     const ConversationMessage* conversation_data,
+                     int conversation_cnt,
+                     const struct ApiConfig* config) {
     int written = 0;
-    char escaped_prompt[BUFFER_SIZE / 2];
-    json_escape_string(prompt, escaped_prompt, sizeof(escaped_prompt));
+    const ConversationMessage* messages;
 
+    // Check if we're dealing with a multi-turn conversation or single prompt
+    if (conversation_data->role == NULL) {
+        // Single prompt case (backward compatibility)
+        const char* prompt = (const char*)conversation_data;
+        char escaped_prompt[BUFFER_SIZE / 2];
+        json_escape_string(prompt, escaped_prompt, sizeof(escaped_prompt));
+
+        ConversationMessage single_message = {"user", escaped_prompt};
+        messages = &single_message;
+    } else {
+        // Multi-turn conversation case
+        messages = (const ConversationMessage*)conversation_data;
+    }
+
+    // Generate payload based on API type
     if (strcmp(config->name, "Gemini") == 0) {
-        written = snprintf(buffer, buffer_size, "{ \"contents\": [ {\"parts\": [ {\"text\": \"%s\"} ]} ] }",
-                           escaped_prompt);
+        written = snprintf(buffer, buffer_size, "{ \"contents\": [");
+        if (written < 0 || (size_t)written >= buffer_size)
+            return -1;
+
+        size_t current_pos = written;
+        for (int i = 0; i < conversation_cnt; i++) {
+            char escaped_content[BUFFER_SIZE / 4];
+            json_escape_string(messages[i].content, escaped_content, sizeof(escaped_content));
+
+            int msg_written = snprintf(buffer + current_pos, buffer_size - current_pos,
+                                       "%s{\"role\": \"%s\", \"parts\": [{\"text\": \"%s\"}]}",
+                                       i > 0 ? ", " : "", messages[i].role, escaped_content);
+
+            if (msg_written < 0 || (size_t)(current_pos + msg_written) >= buffer_size)
+                return -1;
+            current_pos += msg_written;
+        }
+
+        int end_written = snprintf(buffer + current_pos, buffer_size - current_pos, "]}");
+        if (end_written < 0 || (size_t)(current_pos + end_written) >= buffer_size)
+            return -1;
+        written = current_pos + end_written;
+
     } else if (strcmp(config->name, "DeepSeek") == 0) {
-        written = snprintf(buffer, buffer_size,
-                           "{"
-                           "\"model\": \"%s\", "
-                           "\"messages\": ["
-                           "  {\"role\": \"user\", \"content\": \"%s\"}"
-                           "], "
-                           "\"stream\": false"
-                           "}",
-                           config->model_name, escaped_prompt);
+        written = snprintf(buffer, buffer_size, "{\"model\": \"%s\", \"messages\": [", config->model_name);
+        if (written < 0 || (size_t)written >= buffer_size)
+            return -1;
+
+        size_t current_pos = written;
+        for (int i = 0; i < conversation_cnt; i++) {
+            char escaped_content[BUFFER_SIZE / 4];
+            json_escape_string(messages[i].content, escaped_content, sizeof(escaped_content));
+
+            int msg_written = snprintf(buffer + current_pos, buffer_size - current_pos,
+                                       "%s{\"role\": \"%s\", \"content\": \"%s\"}", i > 0 ? ", " : "",
+                                       messages[i].role, escaped_content);
+
+            if (msg_written < 0 || (size_t)(current_pos + msg_written) >= buffer_size)
+                return -1;
+            current_pos += msg_written;
+        }
+
+        int end_written = snprintf(buffer + current_pos, buffer_size - current_pos, "], \"stream\": false}");
+        if (end_written < 0 || (size_t)(current_pos + end_written) >= buffer_size)
+            return -1;
+        written = current_pos + end_written;
+
     } else if (strcmp(config->name, "Qwen") == 0) {
-        written = snprintf(buffer, buffer_size,
-                           "{"
-                           "\"model\": \"%s\", "
-                           "\"messages\": ["
-                           "  {"
-                           "  \"role\": \"user\", "
-                           "  \"content\": ["
-                           "    {\"type\": \"text\",\"text\": \"%s\"}"
-                           "   ]"
-                           "  }"
-                           "], "
-                           "\"stream\": false"
-                           "}",
-                           config->model_name, escaped_prompt);
+        written = snprintf(buffer, buffer_size, "{\"model\": \"%s\", \"messages\": [", config->model_name);
+        if (written < 0 || (size_t)written >= buffer_size)
+            return -1;
+
+        size_t current_pos = written;
+        for (int i = 0; i < conversation_cnt; i++) {
+            char escaped_content[BUFFER_SIZE / 4];
+            json_escape_string(messages[i].content, escaped_content, sizeof(escaped_content));
+
+            int msg_written =
+                snprintf(buffer + current_pos, buffer_size - current_pos,
+                         "%s{\"role\": \"%s\", \"content\": [{\"type\": \"text\", \"text\": \"%s\"}]}",
+                         i > 0 ? ", " : "", messages[i].role, escaped_content);
+
+            if (msg_written < 0 || (size_t)(current_pos + msg_written) >= buffer_size)
+                return -1;
+            current_pos += msg_written;
+        }
+
+        int end_written = snprintf(buffer + current_pos, buffer_size - current_pos, "], \"stream\": false}");
+        if (end_written < 0 || (size_t)(current_pos + end_written) >= buffer_size)
+            return -1;
+        written = current_pos + end_written;
+
     } else {
         fprintf(stderr, "ERROR: Unsupported API configuration.\n");
         return -1;
     }
 
-    if (written < 0 || (size_t)written >= buffer_size) {
-        fprintf(stderr, "ERROR: Failed to generate Gemini payload or buffer too small.\n");
-        return -1;
-    }
     return written;
 }
 

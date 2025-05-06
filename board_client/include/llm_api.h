@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 #define TARGET_PORT 443
-#define BUFFER_SIZE 8192
+#define BUFFER_SIZE 81920
 
 #define PROXY_HOST "10.33.47.116"
 #define PROXY_PORT 7897
@@ -10,6 +10,11 @@
 #define GEMINI_API_KEY "AIzaSyCSeZma5tqzDMdUUy5oRxlSeyIR_0HeXUI"
 #define DEEPSEEK_API_KEY "sk-9d419252992248f3bbe6fe260b45900f"
 #define QWEN_API_KEY "sk-4043fd4940064916a9fbc11efece7603"
+
+typedef struct {
+    const char* role;
+    const char* content;
+} ConversationMessage;
 
 typedef enum {
     AUTH_METHOD_NONE,
@@ -25,10 +30,18 @@ typedef struct ApiConfig {
     ApiAuthMethod auth_method;  // How the API key is used
     const char* model_name;     // Optional: Model identifier (e.g., "gemini-pro")
     const char* response_search_key;
+    char* role;
+    bool use_proxy;
 } ApiConfig;
 
-char* send_llm_request(const ApiConfig* llm_api, const char* user_prompt, bool USE_PROXY);
+char* send_llm_request(const ApiConfig* llm_api,
+                       const ConversationMessage* conversation_data,
+                       int conversation_cnt);
 
-int generate_payload(char* buffer, size_t buffer_size, const char* prompt, const struct ApiConfig* config);
+int generate_payload(char* buffer,
+                     size_t buffer_size,
+                     const ConversationMessage* conversation_data,
+                     int conversation_cnt,
+                     const struct ApiConfig* config);
 
 int parse_response(const char* response, char* output_buffer, size_t output_size, const char* search_key);
