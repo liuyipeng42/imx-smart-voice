@@ -1,21 +1,39 @@
-#include <sqlite3.h>
+#include <string>
 
-int init_database(sqlite3** db, const char* db_path);
+#include "sqlite3.h"
 
-int insert_message(sqlite3* db,
-                   const char* llm,
-                   const char* message,
-                   const char* response,
-                   const char* timestamp);
+#ifndef CHAT_RECORD_HPP
+#define CHAT_RECORD_HPP
 
-int query_all_messages(sqlite3* db);
+class ChatRecordDB {
+    sqlite3* db_;
+    std::string db_path_;
 
-int query_all_dates(sqlite3* db);
+   public:
+    ChatRecordDB() = default;
+    ChatRecordDB(std::string db_path);
 
-int query_messages_by_date(sqlite3* db, const char* date);
+    ~ChatRecordDB() {
+        if (db_) {
+            sqlite3_close(db_);
+        }
+    }
 
-int delete_messages_by_date(sqlite3* db, const char* date);
+    int InitDatabase();
 
-int delete_message_by_id(sqlite3* db, int id);
+    int InsertMessage(const char* llm, const char* message, const char* response, const char* timestamp);
 
-int update_message_by_id(sqlite3* db, int id, const char* message, const char* response);
+    int QueryAllMessages();
+
+    int QueryAllDates();
+
+    int QueryMessagesByDate(const char* date);
+
+    int DeleteMessagesByDate(const char* date);
+
+    int DeleteMessageByID(int id);
+
+    int UpdateMessageByID(int id, const char* message, const char* response);
+};
+
+#endif

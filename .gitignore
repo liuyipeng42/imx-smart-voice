@@ -1,10 +1,12 @@
-.vscode
+drivers/.vscode
+board_client/.vscode
 board_client/test_audios
 board_client/build/*
 board_client/extern/*
+board_client/.qmake.stash
+board_client/Makefile
 drivers/key.ko
 drivers/gt1151.ko
-qt_ui/qt_ui
 speech_backend/venv/.directory
 speech_backend/__pycache__
 speech_backend/audios/*
