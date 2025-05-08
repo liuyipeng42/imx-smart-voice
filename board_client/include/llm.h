@@ -19,6 +19,7 @@
 struct ConversationMessage {
     const std::string role;
     const std::string content;
+    bool has_image;
 };
 
 enum ApiAuthMethod {
@@ -38,6 +39,8 @@ class LLM {
     std::string role_;
     bool use_proxy_;
 
+    char* Base64Encode(const unsigned char* input, int length);
+
     std::string GeneratePayload(std::vector<ConversationMessage>& conversation_data);
 
     std::string ParseResponse(const std::string& response);
@@ -47,6 +50,7 @@ class LLM {
     std::string JsonUnescapeString(const std::string& input);
 
    public:
+    LLM() = default;
     LLM(std::string name,
         std::string host,
         std::string path_base,

@@ -17,10 +17,6 @@ V4L2Camera::V4L2Camera() : v4l2_fd_(-1), rgb_buffer_(nullptr) {
     Init();
 }
 
-V4L2Camera::~V4L2Camera() {
-    CleanUp();
-}
-
 int V4L2Camera::xioctl(int fd, int request, void* arg) {
     int r;
     do {

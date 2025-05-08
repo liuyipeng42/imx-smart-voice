@@ -106,7 +106,7 @@ chattts_generator = tts.ChatTTSGenerator("./models/ChatTTS")
 
 app = Flask(__name__)
 
-client_ip = "10.33.6.33"
+client_ip = "10.33.14.130"
 
 
 @app.route("/upload/audio", methods=["POST"])

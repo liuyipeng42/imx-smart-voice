@@ -11,6 +11,7 @@ class ClientSender {
     int port_;
 
    public:
+    ClientSender() = default;
     ClientSender(const std::string& ip_address, int port);
 
     int AudioSend(const std::string& wav_file_path, const std::string& request_path);

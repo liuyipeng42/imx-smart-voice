@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-class ClientSReceiver {
+class ClientReceiver {
    public:
     static constexpr int MAX_PENDING_CONNECTIONS = 10;
     static constexpr size_t RECEIVE_BUFFER_SIZE = 16384;
@@ -13,8 +13,9 @@ class ClientSReceiver {
     static constexpr long MAX_AUDIO_SIZE = 10 * 1024 * 1024;
     static constexpr long MAX_TEXT_SIZE = 1 * 1024 * 1024;
 
-    ClientSReceiver(int port);
-    ~ClientSReceiver();
+    ClientReceiver() = default;
+    ClientReceiver(int port);
+    ~ClientReceiver();
 
     std::string HandleRequest(const std::string& file_path);
 
@@ -28,8 +29,6 @@ class ClientSReceiver {
         size_t body_start_offset = 0;
         size_t initial_body = 0;
     };
-
-    int SetupListenSocket(int port);
 
     int SendAll(int sockfd, const char* buf, size_t len);
 

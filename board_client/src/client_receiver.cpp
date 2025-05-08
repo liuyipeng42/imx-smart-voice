@@ -12,7 +12,7 @@
 #include <iostream>
 #include "client_receiver.h"
 
-ClientSReceiver::ClientSReceiver(int port) : listen_socket_(-1) {
+ClientReceiver::ClientReceiver(int port) : listen_socket_(-1) {
     listen_socket_ = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_socket_ < 0) {
         perror("socket() failed");
@@ -41,13 +41,13 @@ ClientSReceiver::ClientSReceiver(int port) : listen_socket_(-1) {
     }
 }
 
-ClientSReceiver::~ClientSReceiver() {
+ClientReceiver::~ClientReceiver() {
     if (listen_socket_ != -1) {
         close(listen_socket_);
     }
 }
 
-int ClientSReceiver::SendAll(int sockfd, const char* buf, size_t len) {
+int ClientReceiver::SendAll(int sockfd, const char* buf, size_t len) {
     size_t sent = 0;
     while (sent < len) {
         ssize_t n;
@@ -62,7 +62,7 @@ int ClientSReceiver::SendAll(int sockfd, const char* buf, size_t len) {
     return 0;
 }
 
-void ClientSReceiver::SendErrorResponse(int sockfd, int code, const std::string& message) {
+void ClientReceiver::SendErrorResponse(int sockfd, int code, const std::string& message) {
     const std::string status_lines[] = {
         "HTTP/1.1 400 Bad Request",
         "HTTP/1.1 411 Length Required",
@@ -103,7 +103,7 @@ void ClientSReceiver::SendErrorResponse(int sockfd, int code, const std::string&
     }
 }
 
-int ClientSReceiver::ParseHeaders(const std::string& headers, RequestInfo& info) {
+int ClientReceiver::ParseHeaders(const std::string& headers, RequestInfo& info) {
     std::istringstream stream(headers);
     std::string line;
 
@@ -152,7 +152,7 @@ int ClientSReceiver::ParseHeaders(const std::string& headers, RequestInfo& info)
     return found_cl ? 0 : -1;
 }
 
-int ClientSReceiver::ReceiveHeaders(int sockfd, RequestInfo& info) {
+int ClientReceiver::ReceiveHeaders(int sockfd, RequestInfo& info) {
     receive_buffer_.resize(MAX_HEADER_SIZE);
     size_t received = 0;
     char* headers_end = nullptr;
@@ -177,7 +177,7 @@ int ClientSReceiver::ReceiveHeaders(int sockfd, RequestInfo& info) {
     return 0;
 }
 
-void ClientSReceiver::HandleAudioUpload(int sockfd,
+void ClientReceiver::HandleAudioUpload(int sockfd,
                                         const RequestInfo& info,
                                         const std::string& file_path,
                                         long long max_size) {
@@ -237,7 +237,7 @@ void ClientSReceiver::HandleAudioUpload(int sockfd,
     SendAll(sockfd, response.c_str(), response.size());
 }
 
-std::string ClientSReceiver::HandleTextRequest(int sockfd, RequestInfo& info, size_t max_size) {
+std::string ClientReceiver::HandleTextRequest(int sockfd, RequestInfo& info, size_t max_size) {
     if (static_cast<size_t>(info.content_length) > max_size) {
         SendErrorResponse(sockfd, 413, "Payload too large");
         return "";
@@ -275,7 +275,7 @@ std::string ClientSReceiver::HandleTextRequest(int sockfd, RequestInfo& info, si
     return body;
 }
 
-std::string ClientSReceiver::HandleRequest(const std::string& file_path) {
+std::string ClientReceiver::HandleRequest(const std::string& file_path) {
 
     struct sockaddr_in client_addr;
     socklen_t addrlen = sizeof(client_addr);

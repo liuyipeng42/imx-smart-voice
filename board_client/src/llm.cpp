@@ -3,7 +3,9 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <openssl/bio.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/ssl.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,6 +13,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <fstream>
 #include <iostream>
 #include <memory>
 
@@ -38,8 +41,6 @@ LLM::LLM(std::string name,
 LLM::~LLM() {};
 
 std::string LLM::SendRequest(std::vector<ConversationMessage>& conversation_data) {
-    std::string payload = GeneratePayload(conversation_data);
-
     try {
         // --- Initialize OpenSSL ---
         OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, nullptr);
@@ -161,6 +162,8 @@ std::string LLM::SendRequest(std::vector<ConversationMessage>& conversation_data
             }
         }
 
+        std::string payload = GeneratePayload(conversation_data);
+
         std::string request = "POST " + full_path + " HTTP/1.1\r\n" + "Host: " + host_ + "\r\n" +
                               "Content-Type: application/json\r\n" + auth_header +
                               "Content-Length: " + std::to_string(payload.size()) + "\r\n" +
@@ -205,6 +208,27 @@ std::string LLM::SendRequest(std::vector<ConversationMessage>& conversation_data
     }
 }
 
+char* LLM::Base64Encode(const unsigned char* input, int length) {
+    BIO *bio, *b64;
+    BUF_MEM* bufferPtr;
+
+    b64 = BIO_new(BIO_f_base64());
+    bio = BIO_new(BIO_s_mem());
+    bio = BIO_push(b64, bio);
+
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
+    BIO_write(bio, input, length);
+    BIO_flush(bio);
+    BIO_get_mem_ptr(bio, &bufferPtr);
+
+    char* output = (char*)malloc(bufferPtr->length + 1);
+    memcpy(output, bufferPtr->data, bufferPtr->length);
+    output[bufferPtr->length] = '\0';
+
+    BIO_free_all(bio);
+    return output;
+}
+
 std::string LLM::GeneratePayload(std::vector<ConversationMessage>& conversation_data) {
     std::string payload;
 
@@ -243,11 +267,39 @@ std::string LLM::GeneratePayload(std::vector<ConversationMessage>& conversation_
 
             if (i > 0)
                 payload += ", ";
-            payload += "{\"role\": \"" + std::string(conversation_data[i].role) + "\", \"content\": \"" +
-                       escaped_content + "\"}";
+
+            if (i == conversation_data.size() - 1 && conversation_data[i].has_image) {
+                const char* image_path = "./image.jpg";
+                std::ifstream file(image_path, std::ios::binary | std::ios::ate);
+                if (file.is_open()) {
+                    std::streamsize fsize = file.tellg();
+                    file.seekg(0, std::ios::beg);
+
+                    std::vector<unsigned char> data(fsize);
+                    if (file.read(reinterpret_cast<char*>(data.data()), fsize)) {
+                        std::unique_ptr<char, decltype(&free)> b64(Base64Encode(data.data(), fsize), free);
+
+                        payload +=
+                            "{\"role\":\"user\", \"content\":["
+                            "{\"type\":\"text\",\"text\":\"" +
+                            escaped_content +
+                            "\"},"
+                            "{\"type\":\"image_url\", \"image_url\":{\"url\":\"data:image/jpeg;base64," +
+                            std::string(b64.get()) +
+                            "\"}}"
+                            "]}";
+                        continue;
+                    }
+                }
+            }
+
+            payload += "{\"role\": \"" + std::string(conversation_data[i].role) +
+                       "\", \"content\": [{\"type\": \"text\", \"text\": \"" + escaped_content + "\"}]}";
         }
 
         payload += "]}";
+
+        // std::cout << "Payload: " << payload << std::endl;
     }
 
     return payload;

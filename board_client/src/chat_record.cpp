@@ -1,6 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
+#include <vector>
 
 #include "chat_record.h"
 
@@ -14,18 +18,36 @@ int ChatRecordDB::InitDatabase() {
         return rc;
     }
 
-    const char* create_table_sql =
-        "CREATE TABLE IF NOT EXISTS messages ("
+    // Create conversations table
+    const char* create_conversations_sql =
+        "CREATE TABLE IF NOT EXISTS conversations ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "llm TEXT NOT NULL, "
+        "created_at INTEGER DEFAULT (strftime('%s', 'now')), "
+        "updated_at INTEGER DEFAULT (strftime('%s', 'now')));";
+
+    // Create messages table with reference to conversations
+    const char* create_messages_sql =
+        "CREATE TABLE IF NOT EXISTS messages ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "conversation_id INTEGER NOT NULL, "
+        "role TEXT NOT NULL, "  // 'user' or 'assistant'
         "message TEXT NOT NULL, "
-        "response TEXT NOT NULL, "
-        "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);";
+        "created_at INTEGER DEFAULT (strftime('%s', 'now')), "
+        "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE);";
 
     char* err_msg = NULL;
-    rc = sqlite3_exec(db_, create_table_sql, 0, 0, &err_msg);
+    rc = sqlite3_exec(db_, create_conversations_sql, 0, 0, &err_msg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Table creation error: %s\n", err_msg);
+        fprintf(stderr, "Conversations table creation error: %s\n", err_msg);
+        sqlite3_free(err_msg);
+        sqlite3_close(db_);
+        return rc;
+    }
+
+    rc = sqlite3_exec(db_, create_messages_sql, 0, 0, &err_msg);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Messages table creation error: %s\n", err_msg);
         sqlite3_free(err_msg);
         sqlite3_close(db_);
         return rc;
@@ -34,228 +56,268 @@ int ChatRecordDB::InitDatabase() {
     return SQLITE_OK;
 }
 
-int ChatRecordDB::InsertMessage(const char* llm,
-                                const char* message,
-                                const char* response,
-                                const char* timestamp) {
-    const char* insert_sql;
+int ChatRecordDB::CreateConversation(const std::string& llm, time_t created_at) {
+    const char* sql;
+    if (created_at > 0)
+        sql = "INSERT INTO conversations (llm, created_at) VALUES (?, ?);";
+    else
+        sql = "INSERT INTO conversations (llm) VALUES (?);";
+
     sqlite3_stmt* stmt;
 
-    if (timestamp && *timestamp) {
-        insert_sql = "INSERT INTO messages(llm, message, response, timestamp) VALUES (?, ?, ?, ?);";
-    } else {
-        insert_sql = "INSERT INTO messages(llm, message, response) VALUES (?, ?, ?);";
-    }
-
-    int rc = sqlite3_prepare_v2(db_, insert_sql, -1, &stmt, NULL);
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Prepare insert failed: %s\n", sqlite3_errmsg(db_));
-        return rc;
+        fprintf(stderr, "Prepare create conversation failed: %s\n", sqlite3_errmsg(db_));
+        return -1;
     }
 
-    sqlite3_bind_text(stmt, 1, llm, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, message, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, response, -1, SQLITE_STATIC);
-
-    if (timestamp && *timestamp) {
-        sqlite3_bind_text(stmt, 4, timestamp, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, llm.c_str(), -1, SQLITE_STATIC);
+    if (created_at > 0) {
+        sqlite3_bind_int64(stmt, 2, created_at);
     }
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        fprintf(stderr, "Insert failed: %s\n", sqlite3_errmsg(db_));
+        fprintf(stderr, "Create conversation failed: %s\n", sqlite3_errmsg(db_));
+        sqlite3_finalize(stmt);
+        return -1;
     }
 
+    int conversation_id = sqlite3_last_insert_rowid(db_);
     sqlite3_finalize(stmt);
-    return (rc == SQLITE_DONE) ? SQLITE_OK : rc;
+    return conversation_id;
 }
 
-int ChatRecordDB::QueryAllMessages() {
-    const char* sql = "SELECT id, llm, message, response, timestamp FROM messages ORDER BY timestamp ASC;";
+int ChatRecordDB::AddMessageToConversation(int conversation_id,
+                                           const std::string& role,
+                                           const std::string& message,
+                                           time_t created_at) {
+    const char* sql;
+    if (created_at > 0)
+        sql = "INSERT INTO messages (conversation_id, role, message, created_at) VALUES (?, ?, ?, ?);";
+    else
+        sql = "INSERT INTO messages (conversation_id, role, message) VALUES (?, ?, ?);";
+
     sqlite3_stmt* stmt;
 
     int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Prepare select failed: %s\n", sqlite3_errmsg(db_));
-        return rc;
+        fprintf(stderr, "Prepare add message failed: %s\n", sqlite3_errmsg(db_));
+        return -1;
     }
 
-    printf("%-20s | %-5s | %-10s | %-30s | %s\n", "Timestamp", "ID", "LLM", "Message", "Response");
-    printf(
-        "----------------------------------------------------------------------------------------------------"
-        "---------\n");
+    sqlite3_bind_int(stmt, 1, conversation_id);
+    sqlite3_bind_text(stmt, 2, role.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, message.c_str(), -1, SQLITE_STATIC);
+    if (created_at > 0) {
+        sqlite3_bind_int64(stmt, 4, created_at);
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        fprintf(stderr, "Add message failed: %s\n", sqlite3_errmsg(db_));
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+
+    // Update conversation's updated_at timestamp
+    const char* update_sql = "UPDATE conversations SET updated_at = strftime('%s', 'now') WHERE id = ?;";
+    sqlite3_stmt* update_stmt;
+
+    rc = sqlite3_prepare_v2(db_, update_sql, -1, &update_stmt, NULL);
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_int(update_stmt, 1, conversation_id);
+        sqlite3_step(update_stmt);
+        sqlite3_finalize(update_stmt);
+    }
+
+    int message_id = sqlite3_last_insert_rowid(db_);
+    sqlite3_finalize(stmt);
+    return message_id;
+}
+
+ChatRecordDB::Conversation ChatRecordDB::GetConversation(int conversation_id) {
+    Conversation conv;
+    conv.id = -1;
+
+    const char* conv_sql = "SELECT id, llm, created_at, updated_at FROM conversations WHERE id = ?;";
+    sqlite3_stmt* conv_stmt;
+
+    int rc = sqlite3_prepare_v2(db_, conv_sql, -1, &conv_stmt, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Prepare get conversation failed: %s\n", sqlite3_errmsg(db_));
+        return conv;
+    }
+
+    sqlite3_bind_int(conv_stmt, 1, conversation_id);
+
+    if (sqlite3_step(conv_stmt) == SQLITE_ROW) {
+        conv.id = sqlite3_column_int(conv_stmt, 0);
+        conv.llm = reinterpret_cast<const char*>(sqlite3_column_text(conv_stmt, 1));
+        conv.created_at = sqlite3_column_int64(conv_stmt, 2);
+        conv.updated_at = sqlite3_column_int64(conv_stmt, 3);
+    }
+
+    sqlite3_finalize(conv_stmt);
+
+    if (conv.id < 0)
+        return conv;  // Conversation not found
+    return conv;
+}
+
+std::vector<ChatRecordDB::Message> ChatRecordDB::QueryMessagesOfConversation(int conversation_id) {
+    const char* sql =
+        "SELECT id, conversation_id, role, message, created_at FROM messages WHERE conversation_id = ? "
+        "ORDER BY created_at ASC;";
+    sqlite3_stmt* stmt;
+    std::vector<Message> messages;
+
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Prepare message select failed: %s\n", sqlite3_errmsg(db_));
+        return messages;
+    }
+
+    sqlite3_bind_int(stmt, 1, conversation_id);
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        const char* llm = (const char*)sqlite3_column_text(stmt, 1);
-        const char* message = (const char*)sqlite3_column_text(stmt, 2);
-        const char* response = (const char*)sqlite3_column_text(stmt, 3);
-        const char* time = (const char*)sqlite3_column_text(stmt, 4);
+        Message message;
+        message.id = sqlite3_column_int(stmt, 0);
+        message.conversation_id = sqlite3_column_int(stmt, 1);
+        message.role = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        message.message = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        message.created_at = sqlite3_column_int64(stmt, 4);
 
-        printf("%-20s | #%-4d | %-10s | %-30.30s | %.30s...\n", time, id, llm, message, response);
+        messages.push_back(message);
     }
 
     sqlite3_finalize(stmt);
-    return SQLITE_OK;
+    return messages;
 }
 
-int ChatRecordDB::QueryAllDates() {
-    const char* sql = "SELECT DISTINCT DATE(timestamp) as date FROM messages ORDER BY date ASC;";
+std::vector<std::string> ChatRecordDB::QueryAllDates() {
+    const char* sql =
+        "SELECT DISTINCT strftime('%Y-%m-%d', created_at, 'unixepoch') FROM conversations ORDER BY "
+        "created_at ASC;";
     sqlite3_stmt* stmt;
+    std::vector<std::string> dates;
 
     int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "Prepare date select failed: %s\n", sqlite3_errmsg(db_));
-        return rc;
+        return dates;
     }
-
-    printf("=== Available Dates ===\n");
-    int count = 0;
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        const char* date = (const char*)sqlite3_column_text(stmt, 0);
-        printf("%s\n", date);
-        count++;
-    }
-
-    if (count == 0) {
-        printf("No chat history found\n");
-    } else {
-        printf("Total: %d date(s)\n", count);
+        const unsigned char* date = sqlite3_column_text(stmt, 0);
+        if (date) {
+            dates.push_back(reinterpret_cast<const char*>(date));
+        }
     }
 
     sqlite3_finalize(stmt);
-    return SQLITE_OK;
+    return dates;
 }
 
-int ChatRecordDB::QueryMessagesByDate(const char* date) {
-    if (!date || strlen(date) < 8) {
+std::vector<ChatRecordDB::Conversation> ChatRecordDB::QueryConversationsByDate(const std::string& date) {
+    if (date.size() != 10 || date[4] != '-' || date[7] != '-') {
         fprintf(stderr, "Invalid date format. Use YYYY-MM-DD\n");
-        return SQLITE_ERROR;
+        return {};
     }
 
     const char* sql =
-        "SELECT id, llm, message, response, timestamp FROM messages "
-        "WHERE DATE(timestamp) = ? ORDER BY timestamp ASC;";
+        "SELECT id FROM conversations "
+        "WHERE strftime('%Y-%m-%d', created_at, 'unixepoch') = ? "
+        "ORDER BY created_at DESC;";
+
     sqlite3_stmt* stmt;
+    std::vector<Conversation> conversations;
 
     int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Prepare date select failed: %s\n", sqlite3_errmsg(db_));
-        return rc;
+        fprintf(stderr, "Prepare conversation by date failed: %s\n", sqlite3_errmsg(db_));
+        return conversations;
     }
 
-    sqlite3_bind_text(stmt, 1, date, -1, SQLITE_STATIC);
-    printf("=== Messages on %s ===\n", date);
-    printf("%-20s | %-5s | %-10s | %-30s | %s\n", "Timestamp", "ID", "LLM", "Message", "Response");
-    printf(
-        "----------------------------------------------------------------------------------------------------"
-        "---------\n");
+    sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_STATIC);
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        const char* llm = (const char*)sqlite3_column_text(stmt, 1);
-        const char* message = (const char*)sqlite3_column_text(stmt, 2);
-        const char* response = (const char*)sqlite3_column_text(stmt, 3);
-        const char* time = (const char*)sqlite3_column_text(stmt, 4);
+        int conversation_id = sqlite3_column_int(stmt, 0);
 
-        printf("%-20s | #%-4d | %-10s | %-30.30s | %.30s...\n", time, id, llm, message, response);
+        conversations.push_back(GetConversation(conversation_id));
     }
 
     sqlite3_finalize(stmt);
-    return SQLITE_OK;
+    return conversations;
 }
 
-int ChatRecordDB::DeleteMessagesByDate(const char* date) {
-    if (!date || strlen(date) < 8) {
-        fprintf(stderr, "Invalid date format. Use YYYY-MM-DD\n");
+int ChatRecordDB::DeleteConversation(int conversation_id) {
+    // Enable foreign key constraints to ensure CASCADE works
+    if (sqlite3_exec(db_, "PRAGMA foreign_keys = ON;", NULL, NULL, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Failed to enable foreign keys: %s\n", sqlite3_errmsg(db_));
         return SQLITE_ERROR;
     }
 
-    const char* sql = "DELETE FROM messages WHERE DATE(timestamp) = ?;";
+    // Count messages to be deleted for reporting
+    const char* count_sql = "SELECT COUNT(*) FROM messages WHERE conversation_id = ?;";
+    sqlite3_stmt* count_stmt;
+    int msg_count = 0;
+
+    int rc = sqlite3_prepare_v2(db_, count_sql, -1, &count_stmt, NULL);
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_int(count_stmt, 1, conversation_id);
+        if (sqlite3_step(count_stmt) == SQLITE_ROW) {
+            msg_count = sqlite3_column_int(count_stmt, 0);
+        }
+        sqlite3_finalize(count_stmt);
+    }
+
+    // Delete the conversation (messages will be deleted automatically via ON DELETE CASCADE)
+    const char* sql = "DELETE FROM conversations WHERE id = ?;";
     sqlite3_stmt* stmt;
 
-    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
+    rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Prepare delete by date failed: %s\n", sqlite3_errmsg(db_));
+        fprintf(stderr, "Prepare delete conversation failed: %s\n", sqlite3_errmsg(db_));
         return rc;
     }
 
-    sqlite3_bind_text(stmt, 1, date, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 1, conversation_id);
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        fprintf(stderr, "Delete failed: %s\n", sqlite3_errmsg(db_));
+        fprintf(stderr, "Delete conversation failed: %s\n", sqlite3_errmsg(db_));
     } else {
         int changes = sqlite3_changes(db_);
-        printf("Deleted %d message(s) on %s\n", changes, date);
+        if (changes > 0) {
+            printf("Deleted conversation ID %d with %d associated messages\n", conversation_id, msg_count);
+        } else {
+            printf("No conversation found with ID %d\n", conversation_id);
+        }
     }
 
     sqlite3_finalize(stmt);
     return (rc == SQLITE_DONE) ? SQLITE_OK : rc;
 }
 
-int ChatRecordDB::DeleteMessageByID(int id) {
-    if (id <= 0) {
-        fprintf(stderr, "Invalid ID: must be positive\n");
-        return SQLITE_ERROR;
-    }
-
+int ChatRecordDB::DeleteMessageByID(int message_id) {
     const char* sql = "DELETE FROM messages WHERE id = ?;";
     sqlite3_stmt* stmt;
 
     int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Prepare delete by ID failed: %s\n", sqlite3_errmsg(db_));
+        fprintf(stderr, "Prepare delete message failed: %s\n", sqlite3_errmsg(db_));
         return rc;
     }
 
-    sqlite3_bind_int(stmt, 1, id);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_DONE) {
-        int changes = sqlite3_changes(db_);
-        if (changes > 0) {
-            printf("Deleted message with ID %d\n", id);
-        } else {
-            printf("No message found with ID %d\n", id);
-        }
-    } else {
-        fprintf(stderr, "Delete by ID failed: %s\n", sqlite3_errmsg(db_));
-    }
-
-    sqlite3_finalize(stmt);
-    return (rc == SQLITE_DONE) ? SQLITE_OK : rc;
-}
-
-int ChatRecordDB::UpdateMessageByID(int id, const char* message, const char* response) {
-    if (id <= 0 || !message || !response) {
-        fprintf(stderr, "Invalid parameters for update\n");
-        return SQLITE_ERROR;
-    }
-
-    const char* sql = "UPDATE messages SET message = ?, response = ? WHERE id = ?;";
-    sqlite3_stmt* stmt;
-
-    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        fprintf(stderr, "Prepare update failed: %s\n", sqlite3_errmsg(db_));
-        return rc;
-    }
-
-    sqlite3_bind_text(stmt, 1, message, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, response, -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 3, id);
+    sqlite3_bind_int(stmt, 1, message_id);
 
     rc = sqlite3_step(stmt);
-    if (rc == SQLITE_DONE) {
-        int changes = sqlite3_changes(db_);
-        if (changes > 0) {
-            printf("Updated message ID %d\n", id);
-        } else {
-            printf("No message found with ID %d\n", id);
-        }
+    if (rc != SQLITE_DONE) {
+        fprintf(stderr, "Delete message failed: %s\n", sqlite3_errmsg(db_));
     } else {
-        fprintf(stderr, "Update failed: %s\n", sqlite3_errmsg(db_));
+        int changes = sqlite3_changes(db_);
+        printf("Deleted message ID %d with %d changes\n", message_id, changes);
     }
 
     sqlite3_finalize(stmt);

@@ -10,6 +10,21 @@ class ChatRecordDB {
     std::string db_path_;
 
    public:
+    struct Message {
+        uint id;
+        uint conversation_id;
+        std::string role;
+        std::string message;
+        time_t created_at;
+    };
+
+    struct Conversation {
+        int id;
+        std::string llm;
+        time_t created_at;
+        time_t updated_at;
+    };
+
     ChatRecordDB() = default;
     ChatRecordDB(std::string db_path);
 
@@ -21,19 +36,24 @@ class ChatRecordDB {
 
     int InitDatabase();
 
-    int InsertMessage(const char* llm, const char* message, const char* response, const char* timestamp);
+    int CreateConversation(const std::string& llm, time_t created_at);
 
-    int QueryAllMessages();
+    int AddMessageToConversation(int conversation_id,
+                                 const std::string& role,
+                                 const std::string& message,
+                                 time_t created_at);
 
-    int QueryAllDates();
+    Conversation GetConversation(int conversation_id);
 
-    int QueryMessagesByDate(const char* date);
+    std::vector<Message> QueryMessagesOfConversation(int conversation_id);
 
-    int DeleteMessagesByDate(const char* date);
+    std::vector<std::string> QueryAllDates();
+
+    std::vector<Conversation> QueryConversationsByDate(const std::string& date);
+
+    int DeleteConversation(int conversation_id);
 
     int DeleteMessageByID(int id);
-
-    int UpdateMessageByID(int id, const char* message, const char* response);
 };
 
 #endif

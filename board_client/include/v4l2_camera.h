@@ -23,9 +23,8 @@ class V4L2Camera {
 
    public:
     V4L2Camera();
-    ~V4L2Camera();
-
     bool Capture(const std::string& filename, int quality = 85);
+    void CleanUp();
 
    private:
     int xioctl(int fd, int request, void* arg);
@@ -36,7 +35,6 @@ class V4L2Camera {
                    int height,
                    int quality);
     bool Init();
-    void CleanUp();
 };
 
 #endif  // V4L2_CAMERA_HPP
