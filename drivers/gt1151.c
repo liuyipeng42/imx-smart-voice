@@ -28,12 +28,14 @@
 #define MAX_SUPPORT_POINTS 5 /* 最多5点电容触摸 */
 
 struct gt1151_dev {
-    int irq_pin, reset_pin;    /* 中断和复位IO		*/
-    int irqnum;                /* 中断号    		*/
-    void* private_data;        /* 私有数据 		*/
-    struct input_dev* input;   /* input结构体 		*/
-    struct i2c_client* client; /* I2C客户端 		*/
+    struct gpio_desc* reset_gpio;
+    struct gpio_desc* irq_gpio;
+    int irqnum;
+    void* private_data;
+    struct input_dev* input;
+    struct i2c_client* client;
 };
+
 struct gt1151_dev gt1151;
 
 const unsigned char GT1151_CT[] = {
@@ -50,53 +52,6 @@ const unsigned char GT1151_CT[] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 };
 
-/*
- * @description     : 复位GT1151
- * @param - client 	: 要操作的i2c
- * @param - multidev: 自定义的multitouch设备
- * @return          : 0，成功;其他负值,失败
- */
-static int gt1151_ts_reset(struct i2c_client* client, struct gt1151_dev* dev) {
-    int ret = 0;
-
-    /* 申请复位IO*/
-    if (gpio_is_valid(dev->reset_pin)) {
-        /* 申请复位IO，并且默认输出高电平 */
-        ret = devm_gpio_request_one(&client->dev, dev->reset_pin, GPIOF_OUT_INIT_HIGH, "gt1151 reset");
-        if (ret) {
-            return ret;
-        }
-    }
-
-    /* 申请中断IO*/
-    if (gpio_is_valid(dev->irq_pin)) {
-        /* 申请复位IO，并且默认输出高电平 */
-        ret = devm_gpio_request_one(&client->dev, dev->irq_pin, GPIOF_OUT_INIT_HIGH, "gt1151 int");
-        if (ret) {
-            return ret;
-        }
-    }
-
-    /* 4、初始化GT1151，要严格按照GT1151时序要求 */
-    gpio_set_value(dev->reset_pin, 0); /* 复位GT1151 */
-    msleep(10);
-    gpio_set_value(dev->reset_pin, 1); /* 停止复位GT1151 */
-    msleep(10);
-    gpio_set_value(dev->irq_pin, 0); /* 拉低INT引脚 */
-    msleep(50);
-    gpio_direction_input(dev->irq_pin); /* INT引脚设置为输入 */
-
-    return 0;
-}
-
-/*
- * @description	: 从GT1151读取多个寄存器数据
- * @param - dev:  GT1151设备
- * @param - reg:  要读取的寄存器首地址
- * @param - buf:  读取到的数据
- * @param - len:  要读取的数据长度
- * @return 		: 操作结果
- */
 static int gt1151_read_regs(struct gt1151_dev* dev, u16 reg, u8* buf, int len) {
     int ret;
     u8 regdata[2];
@@ -128,14 +83,6 @@ static int gt1151_read_regs(struct gt1151_dev* dev, u16 reg, u8* buf, int len) {
     return ret;
 }
 
-/*
- * @description	: 向GT1151多个寄存器写入数据
- * @param - dev:  GT1151设备
- * @param - reg:  要写入的寄存器首地址
- * @param - val:  要写入的数据缓冲区
- * @param - len:  要写入的数据长度
- * @return 	  :   操作结果
- */
 static s32 gt1151_write_regs(struct gt1151_dev* dev, u16 reg, u8* buf, u8 len) {
     u8 b[256];
     struct i2c_msg msg;
@@ -200,141 +147,73 @@ fail:
     return IRQ_HANDLED;
 }
 
-/*
- * @description     : GT1151中断初始化
- * @param - client 	: 要操作的i2c
- * @param - multidev: 自定义的multitouch设备
- * @return          : 0，成功;其他负值,失败
- */
-static int gt1151_ts_irq(struct i2c_client* client, struct gt1151_dev* dev) {
-    int ret = 0;
+int gt1151_probe(struct i2c_client* client, const struct i2c_device_id* id) {
+    u8 data;
+    int ret;
+    gt1151.client = client;
 
-    /* 2，申请中断,client->irq就是IO中断， */
+    gt1151.reset_gpio = devm_gpiod_get_optional(&client->dev, "reset", GPIOD_OUT_HIGH);
+    gt1151.irq_gpio = devm_gpiod_get_optional(&client->dev, "interrupt", GPIOD_IN);
+
+    // 初始化GT1151时序
+    gpiod_set_value(gt1151.reset_gpio, 1);  // 复位
+    msleep(10);
+    gpiod_set_value(gt1151.reset_gpio, 0);  // 结束复位
+    msleep(10);
+    // 配置中断引脚
+    gpiod_set_value(gt1151.irq_gpio, 1);  // 拉低
+    msleep(50);
+    gpiod_direction_input(gt1151.irq_gpio);  // 设为输入
+
+    // 软复位GT1151
+    data = 0x02;
+    gt1151_write_regs(&gt1151, GT_CTRL_REG, &data, 1);
+    msleep(100);
+    data = 0x00;
+    gt1151_write_regs(&gt1151, GT_CTRL_REG, &data, 1);
+    msleep(100);
+
+    // 初始化输入设备
+    gt1151.input = devm_input_allocate_device(&client->dev);
+    if (!gt1151.input)
+        return -ENOMEM;
+
+    gt1151.input->name = client->name;
+    gt1151.input->id.bustype = BUS_I2C;
+    gt1151.input->dev.parent = &client->dev;
+    input_set_capability(gt1151.input, EV_KEY, BTN_TOUCH);
+    input_set_abs_params(gt1151.input, ABS_MT_POSITION_X, 0, 480, 0, 0);
+    input_set_abs_params(gt1151.input, ABS_MT_POSITION_Y, 0, 272, 0, 0);
+
+    input_mt_init_slots(gt1151.input, MAX_SUPPORT_POINTS, 0);
+    ret = input_register_device(gt1151.input);
+    if (ret) {
+        dev_err(&client->dev, "Unable to register input device.\n");
+        return ret;
+    }
+
     ret = devm_request_threaded_irq(&client->dev, client->irq, NULL, gt1151_irq_handler,
                                     IRQF_TRIGGER_FALLING | IRQF_ONESHOT, client->name, &gt1151);
     if (ret) {
         dev_err(&client->dev, "Unable to request touchscreen IRQ.\n");
         return ret;
     }
-
     return 0;
 }
 
-/*
- * @description	: 发送GT1151配置参数
- * @param - client: i2c_client
- * @param - mode: 0,参数不保存到flash
- *                1,参数保存到flash
- * @return 		: 无
- */
-void gt1151_send_cfg(struct gt1151_dev* dev, unsigned char mode) {
-    unsigned char buf[2];
-    unsigned int i = 0;
-
-    buf[0] = 0;
-    buf[1] = mode;                            /* 是否写入到GT1151 FLASH?  即是否掉电保存 */
-    for (i = 0; i < (sizeof(GT1151_CT)); i++) /* 计算校验和 */
-        buf[0] += GT1151_CT[i];
-    buf[0] = (~buf[0]) + 1;
-
-    /* 发送寄存器配置 */
-    gt1151_write_regs(dev, GT_CFGS_REG, (u8*)GT1151_CT, sizeof(GT1151_CT));
-    gt1151_write_regs(dev, GT_CHECK_REG, buf, 2); /* 写入校验和,配置更新标记 */
-}
-
-int gt1151_probe(struct i2c_client* client, const struct i2c_device_id* id) {
-    u8 data, ret;
-
-    gt1151.client = client;
-
-    /* 1，获取设备树中的中断和复位引脚 */
-    gt1151.irq_pin = of_get_named_gpio(client->dev.of_node, "interrupt-gpios", 0);
-    gt1151.reset_pin = of_get_named_gpio(client->dev.of_node, "reset-gpios", 0);
-
-    /* 2，复位GT1151 */
-    ret = gt1151_ts_reset(client, &gt1151);
-    if (ret < 0) {
-        goto fail;
-    }
-
-    /* 3，初始化GT1151 */
-    data = 0x02;
-    gt1151_write_regs(&gt1151, GT_CTRL_REG, &data, 1); /* 软复位 */
-    mdelay(100);
-    data = 0x0;
-    gt1151_write_regs(&gt1151, GT_CTRL_REG, &data, 1); /* 停止软复位 */
-    mdelay(100);
-
-    /* 4,初始化GT1151，烧写固件
-    gt1151_read_regs(&gt1151, GT_CFGS_REG, &data, 1);
-    printk("GT1151 ID =%#X\r\n", data);
-    if(data <  GT1151_CT[0]) {
-       gt1151_send_cfg(&gt1151, 0);   芯片内置固件已能够使用，无需下载固件
-    } */
-
-    /* 5，input设备注册 */
-    gt1151.input = devm_input_allocate_device(&client->dev);
-    if (!gt1151.input) {
-        ret = -ENOMEM;
-        goto fail;
-    }
-    gt1151.input->name = client->name;
-    gt1151.input->id.bustype = BUS_I2C;
-    gt1151.input->dev.parent = &client->dev;
-
-    __set_bit(EV_KEY, gt1151.input->evbit);
-    __set_bit(EV_ABS, gt1151.input->evbit);
-    __set_bit(BTN_TOUCH, gt1151.input->keybit);
-
-    input_set_abs_params(gt1151.input, ABS_X, 0, 480, 0, 0);
-    input_set_abs_params(gt1151.input, ABS_Y, 0, 272, 0, 0);
-    input_set_abs_params(gt1151.input, ABS_MT_POSITION_X, 0, 480, 0, 0);
-    input_set_abs_params(gt1151.input, ABS_MT_POSITION_Y, 0, 272, 0, 0);
-    ret = input_mt_init_slots(gt1151.input, MAX_SUPPORT_POINTS, 0);
-    if (ret) {
-        goto fail;
-    }
-
-    ret = input_register_device(gt1151.input);
-    if (ret)
-        goto fail;
-
-    /* 6，最后初始化中断 */
-    ret = gt1151_ts_irq(client, &gt1151);
-    if (ret < 0) {
-        goto fail;
-    }
-    return 0;
-
-fail:
-    return ret;
-}
-
-/*
- * @description     : i2c驱动的remove函数，移除i2c驱动的时候此函数会执行
- * @param - client 	: i2c设备
- * @return          : 0，成功;其他负值,失败
- */
 int gt1151_remove(struct i2c_client* client) {
     input_unregister_device(gt1151.input);
     return 0;
 }
 
-/*
- *  传统驱动匹配表
- */
 const struct i2c_device_id gt1151_id_table[] = {{
                                                     "goodix,gt1151",
                                                     0,
                                                 },
-                                                {/* sentinel */}};
+                                                {}};
 
-/*
- * 设备树匹配表
- */
-const struct of_device_id gt1151_of_match_table[] = {{.compatible = "goodix,gt1151"}, {/* sentinel */}};
+const struct of_device_id gt1151_of_match_table[] = {{.compatible = "goodix,gt1151"}, {}};
 
-/* i2c驱动结构体 */
 struct i2c_driver gt1151_i2c_driver = {
     .driver =
         {
@@ -350,4 +229,4 @@ struct i2c_driver gt1151_i2c_driver = {
 module_i2c_driver(gt1151_i2c_driver);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("jankin");
+MODULE_AUTHOR("LYP");

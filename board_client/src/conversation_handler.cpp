@@ -24,7 +24,7 @@ ConversationHandler::ConversationHandler(std::string db_path) {
     //                  AUTH_METHOD_URL_PARAM, "gemini-2.5-flash-preview-04-17", "\"text\": \"", "model",
     //                  true);
 
-    key_fd_ = open("/dev/key0", O_RDWR);
+    key_fd_ = open("/dev/key", O_RDWR);
     if (key_fd_ < 0)
         printf("Can't open file");
 
