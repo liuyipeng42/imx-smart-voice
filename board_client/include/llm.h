@@ -12,9 +12,9 @@
 #define PROXY_HOST "10.33.47.116"
 #define PROXY_PORT 7897
 
-#define GEMINI_API_KEY "AIzaSyCSeZma5tqzDMdUUy5oRxlSeyIR_0HeXUI"
-#define DEEPSEEK_API_KEY "sk-9d419252992248f3bbe6fe260b45900f"
-#define QWEN_API_KEY "sk-4043fd4940064916a9fbc11efece7603"
+#define GEMINI_API_KEY "test"
+#define DEEPSEEK_API_KEY "test"
+#define QWEN_API_KEY "test"
 
 struct ConversationMessage {
     const std::string role;
